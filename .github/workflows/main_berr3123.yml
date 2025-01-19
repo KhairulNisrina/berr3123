@@ -123,4 +123,3 @@ jobs:
           slot-name: 'Production'
           package: .
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0407DDE4A3B34F1AB18BA482432691B5 }}
->>>>>>> 1d8bf26 (Initial commit)
