@@ -8,8 +8,8 @@ require('dotenv').config();  // Load environment variables from .env file
 
 const app = express();
 const port = process.env.PORT || 3000;
-const uri = process.env.MONGODB_URI;
-const jwtSecret = process.env.JWT_SECRET;
+const uri = `${process.env.MONGODB_URI}`;
+const jwtSecret = `${process.env.JWT_SECRET}`;
 
 app.use(cors());
 app.use(bodyParser.json());
