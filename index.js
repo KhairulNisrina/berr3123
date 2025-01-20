@@ -100,9 +100,19 @@ const validatePassword = (password, username, previousPasswords) => {
   if (previousPasswords.some((hash) => bcrypt.compareSync(password, hash))) {
     errors.push('Password must not have been used before.');
   }
-  if (errors.length > 0) {
-    console.log(errors.join('\n')); // Display each error on a new line
-  }
+
+  // Alternate errors display
+  let i = 0;
+  const showErrorsAlternately = () => {
+    if (i < errors.length) {
+      console.log(errors[i]); // This can be replaced with actual error display in UI
+      i++;
+      setTimeout(showErrorsAlternately, 1000); // Adjust the time interval
+    }
+  };
+  
+  showErrorsAlternately(); // Start showing errors with a delay
+  
   return errors;
 };
 
