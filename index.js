@@ -105,14 +105,14 @@ const validatePassword = (password, username, previousPasswords) => {
   let i = 0;
   const showErrorsAlternately = () => {
     if (i < errors.length) {
-      console.log(errors[i]); // This can be replaced with actual error display in UI
+      console.log(errors[i]); 
       i++;
-      setTimeout(showErrorsAlternately, 1000); // Adjust the time interval
+      setTimeout(showErrorsAlternately, 1000);
     }
   };
   
-  showErrorsAlternately(); // Start showing errors with a delay
-  
+  showErrorsAlternately(); 
+
   return errors;
 };
 
