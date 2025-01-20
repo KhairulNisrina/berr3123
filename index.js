@@ -77,10 +77,10 @@ const authenticateToken = (req, res, next) => {
 
 // Password policy
 const validatePassword = (password, username, previousPasswords) => {
-  const errors = [];
+  let errors = [];
 
   if (password.length < 8 || password.length > 12) {
-    errors.push('Password must be 8-12 characters long./n');
+    errors.push('Password must be 8-12 characters long.');
   }
   if (!/[0-9]/.test(password)) {
     errors.push('Password must contain at least one number.');
@@ -100,7 +100,9 @@ const validatePassword = (password, username, previousPasswords) => {
   if (previousPasswords.some((hash) => bcrypt.compareSync(password, hash))) {
     errors.push('Password must not have been used before.');
   }
-
+  if (errors.length > 0) {
+    console.log(errors.join('\n')); // Display each error on a new line
+  }
   return errors;
 };
 
