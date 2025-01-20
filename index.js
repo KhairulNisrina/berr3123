@@ -11,8 +11,15 @@ const port = process.env.PORT || 3000;
 const uri = `${process.env.MONGODB_URI}`;
 const jwtSecret = `${process.env.JWT_SECRET}`;
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://postman.com'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  credentials: true,
+}));
 app.use(bodyParser.json());
+
+const helmet = require('helmet');
+app.use(helmet());
 
 // Connect to MongoDB using mongoose
 mongoose.connect(uri, {
@@ -34,6 +41,9 @@ mongoose.connect(uri, {
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   password: { type: String, required: true },
+  historyPasswords: { type: [String], default: [] },
+  failedLoginAttempts: { type: Number, default: 0 },
+  lastFailedLogin: { type: Date, default: null },  // Store last failed attempt was made
 });
 
 const questionSchema = new mongoose.Schema({
@@ -65,6 +75,35 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Password policy
+const validatePassword = (password, username, previousPasswords) => {
+  const errors = [];
+
+  if (password.length < 8 || password.length > 12) {
+    errors.push('Password must be 8-12 characters long.');
+  }
+  if (!/[0-9]/.test(password)) {
+    errors.push('Password must contain at least one number.');
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push('Password must contain at least one uppercase letter.');
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push('Password must contain at least one lowercase letter.');
+  }
+  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+    errors.push('Password must contain at least one special character.');
+  }
+  if (password.toLowerCase().includes(username.toLowerCase())) {
+    errors.push('Password must not contain the username.');
+  }
+  if (previousPasswords.some((hash) => bcrypt.compareSync(password, hash))) {
+    errors.push('Password must not have been used before.');
+  }
+
+  return errors;
+};
+
 // User routes
 app.post('/api/users/register', async (req, res) => {
   const { username, password } = req.body;
@@ -80,6 +119,11 @@ app.post('/api/users/register', async (req, res) => {
       return res.status(400).send({ error: 'User already exists' });
     }
 
+    const passwordErrors = validatePassword(password, username, []);
+    if (passwordErrors.length > 0) {
+      return res.status(400).send({ error: passwordErrors.join(' ') });
+    }
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -91,6 +135,14 @@ app.post('/api/users/register', async (req, res) => {
   } catch (error) {
     res.status(400).send('Error registering user');
   }
+});
+
+ const rateLimit = require('express-rate-limit');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 requests per windowMs
+  message: 'Too many login attempts from this IP, please try again later',
 });
 
 app.post('/api/users/login', async (req, res) => {
@@ -105,6 +157,39 @@ app.post('/api/users/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).send({ error: 'Invalid credentials' });
     }
+    
+    // Check if the account is locked due to too many failed attempts
+    if (user.failedLoginAttempts >= 3) {
+      const timeSinceLastFailed = Date.now() - new Date(user.lastFailedLogin).getTime();
+      const lockoutTime = 1 * 60 * 1000; // 1 minutes
+
+      if (timeSinceLastFailed < lockoutTime) {
+        return res.status(403).send({
+          error: 'Too many failed login attempts. Please try again later in 60 seconds.',
+        });
+      } else {
+        // Reset failed attempts after the lockout period
+        user.failedLoginAttempts = 0;
+        user.lastFailedLogin = null;
+      }
+    }
+
+    // Validate the password
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordCorrect) {
+      // Increment failed attempts counter
+      user.failedLoginAttempts += 1;
+      user.lastFailedLogin = Date.now();
+      await user.save();
+
+      return res.status(401).send({ error: 'Invalid credentials' });
+    }
+
+    // Reset failed attempts on successful login
+    user.failedLoginAttempts = 0;
+    user.lastFailedLogin = null;
+    await user.save();
 
     const token = jwt.sign({ username: user.username }, jwtSecret, { expiresIn: '1h' });
     res.json({ token });
@@ -127,21 +212,31 @@ app.get('/api/users/:username', authenticateToken, async (req, res) => {
   }
 });
 
+// Update user password
 app.patch('/api/users/:username', authenticateToken, async (req, res) => {
   const { username } = req.params;
-  const update = req.body;
+  const { password } = req.body;
 
   try {
-    if (update.password) {
-      update.password = await bcrypt.hash(update.password, 10);
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(404).send({ error: 'User not found.' });
     }
-    const result = await User.updateOne({ username }, { $set: update });
-    if (result.nModified === 0) {
-      return res.status(404).send({ error: 'User not found' });
+
+    if (password) {
+      const passwordErrors = validatePassword(password, username, user.historyPasswords);
+      if (passwordErrors.length > 0) {
+        return res.status(400).send({ error: passwordErrors.join(' ') });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      user.historyPasswords.push(user.password);
+      user.password = hashedPassword;
+      await user.save();
     }
     res.send({ message: 'User updated successfully' });
   } catch (error) {
-    res.status(400).send({ error: error.message });
+    res.status(400).send({ error: 'Error.' });
   }
 });
 
@@ -159,8 +254,15 @@ app.delete('/api/users/:username', authenticateToken, async (req, res) => {
   }
 });
 
+const checkAdminRole = (req, res, next) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).send({ error: 'Forbidden' });
+  }
+  next();
+};
+
 // Question routes
-app.post('/api/questions', authenticateToken, async (req, res) => {
+app.post('/api/questions', authenticateToken, checkAdminRole, async (req, res) => {
   const { question, options, correctAnswer } = req.body;
 
   try {
@@ -181,7 +283,7 @@ app.get('/api/questions', authenticateToken, async (req, res) => {
   }
 });
 
-app.patch('/api/questions/:id', authenticateToken, async (req, res) => {
+app.patch('/api/questions/:id', authenticateToken, checkAdminRole, async (req, res) => {
   const questionId = req.params.id;
   const { question, options, correctAnswer } = req.body;
 
@@ -201,7 +303,7 @@ app.patch('/api/questions/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.delete('/api/questions/:id', authenticateToken, async (req, res) => {
+app.delete('/api/questions/:id', authenticateToken, checkAdminRole, async (req, res) => {
   const questionId = req.params.id;
 
   try {
@@ -254,7 +356,7 @@ app.patch('/api/scores/:username', authenticateToken, async (req, res) => {
   }
 });
 
-app.delete('/api/scores/:username', authenticateToken, async (req, res) => {
+app.delete('/api/scores/:username', authenticateToken, checkAdminRole, async (req, res) => {
   const username = req.params.username;
 
   try {
