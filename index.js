@@ -80,7 +80,7 @@ const validatePassword = (password, username, previousPasswords) => {
   const errors = [];
 
   if (password.length < 8 || password.length > 12) {
-    errors.push('Password must be 8-12 characters long.');
+    errors.push('Password must be 8-12 characters long./n');
   }
   if (!/[0-9]/.test(password)) {
     errors.push('Password must contain at least one number.');
